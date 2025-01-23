@@ -30,6 +30,8 @@ namespace ThreeDeeBear.Models.Ply
         public int? GreenIndex;
         public int? BlueIndex;
         public int? AlphaIndex;
+		public int SIndex;
+		public int TIndex;
         public PlyFaceParseMode FaceParseMode;
         public List<string> RawHeader;
 
@@ -93,6 +95,12 @@ namespace ThreeDeeBear.Models.Ply
                         break;
                     case "alpha":
                         AlphaIndex = i;
+                        break;
+					case "s":
+                        SIndex = i;
+                        break;
+					case "t":
+                        TIndex = i;
                         break;
                 }
             }

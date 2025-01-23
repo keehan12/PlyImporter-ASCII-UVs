@@ -14,12 +14,14 @@ namespace ThreeDeeBear.Models.Ply
         public List<Vector3> Vertices;
         public List<int> Triangles;
         public List<Color> Colors;
+		public List<Vector2> Uvs;
 
-        public PlyResult(List<Vector3> vertices, List<int> triangles, List<Color> colors)
+        public PlyResult(List<Vector3> vertices, List<int> triangles, List<Color> colors, List<Vector2> uvs)
         {
             Vertices = vertices;
             Triangles = triangles;
             Colors = colors;
+			Uvs = uvs;
         }
     }
     public static class PlyHandler
@@ -31,21 +33,26 @@ namespace ThreeDeeBear.Models.Ply
             var vertices = new List<Vector3>();
             var triangles = new List<int>();
             var colors = new List<Color>();
+			var uvs = new List<Vector2>();
             var headerEndIndex = plyFile.IndexOf("end_header");
             var vertexStartIndex = headerEndIndex + 1;
-            var faceStartIndex = vertexStartIndex + header.VertexCount + 1;
+            var faceStartIndex = vertexStartIndex + header.VertexCount;
             plyFile.GetRange(vertexStartIndex, header.VertexCount).ForEach(vertex =>
             {
                 var xyzrgb = vertex.Split(' ');
                 vertices.Add(ParseVertex(xyzrgb, header));
                 colors.Add(ParseColor(xyzrgb, header));
+				
+				var st = vertex.Split(' ');
+                uvs.Add(ParseUvs(st, header));
             });
 
             plyFile.GetRange(faceStartIndex, header.FaceCount).ForEach(face =>
             {
                 triangles.AddRange(GetTriangles(face, header));
             });
-            return new PlyResult(vertices, triangles, colors);
+			
+            return new PlyResult(vertices, triangles, colors, uvs);
         }
         private static Vector3 ParseVertex(string[] xyzrgb, PlyHeader header)
         {
@@ -71,6 +78,14 @@ namespace ThreeDeeBear.Models.Ply
             if (header.AlphaIndex.HasValue)
                 int.TryParse(xyzrgb[header.AlphaIndex.Value], NumberStyles.Integer, CultureInfo.InvariantCulture, out a);
             return new Color(r / 255f, g / 255f, b / 255f, a / 255f);
+        }
+		
+		private static Vector2 ParseUvs(string[] st, PlyHeader header)
+        {
+            decimal ds, dt;
+            decimal.TryParse(st[header.SIndex], NumberStyles.Float, CultureInfo.InvariantCulture, out ds);
+            decimal.TryParse(st[header.TIndex], NumberStyles.Float, CultureInfo.InvariantCulture, out dt);
+            return new Vector2((float)ds, (float)dt);
         }
 
         private static List<int> GetTriangles(string faceVertexList, PlyHeader header)
@@ -98,93 +113,8 @@ namespace ThreeDeeBear.Models.Ply
                     return new List<int>();
             }
         }
+		
         #endregion
-
-        #region Binary
-
-        private static PlyResult ParseBinaryLittleEndian(string path, PlyHeader header)
-        {
-            var headerAsText = header.RawHeader.Aggregate((a, b) => $"{a}\n{b}") + "\n";
-            var headerAsBytes = Encoding.ASCII.GetBytes(headerAsText);
-            var withoutHeader = File.ReadAllBytes(path).Skip(headerAsBytes.Length).ToArray();
-            var colors = new List<Color>();
-            var vertices = GetVertices(withoutHeader, header, out colors);
-            var triangles = GetTriangles(withoutHeader, header);
-            return new PlyResult(vertices, triangles, colors);
-        }
-
-        private static List<Vector3> GetVertices(byte[] bytes, PlyHeader header, out List<Color> colors)
-        {
-            var vertices = new List<Vector3>();
-            colors = new List<Color>();
-            int bpvc = 4; // bytes per vertex component
-            int bpcc = 1; // bytes per color component
-            bool hasColor = header.RedIndex.HasValue && header.GreenIndex.HasValue && header.BlueIndex.HasValue;
-            // todo: support other types than just float for vertex components and byte for color components
-            int bytesPerVertex = GetByteCountPerVertex(header);
-
-            for (int i = 0; i < header.VertexCount; i++)
-            {
-                int byteIndex = i * bytesPerVertex;
-                var x = System.BitConverter.ToSingle(bytes.SubArray(byteIndex + 0 * bpvc, bpvc), 0);
-                var y = System.BitConverter.ToSingle(bytes.SubArray(byteIndex + 1 * bpvc, bpvc), 0);
-                var z = System.BitConverter.ToSingle(bytes.SubArray(byteIndex + 2 * bpvc, bpvc), 0);
-                if (hasColor)
-                {
-                    byte r, g, b, a = 255;
-                    r = bytes[byteIndex + 3 * bpvc + 0 * bpcc];
-                    g = bytes[byteIndex + 3 * bpvc + 1 * bpcc];
-                    b = bytes[byteIndex + 3 * bpvc + 2 * bpcc];
-                    if (header.AlphaIndex.HasValue)
-                    {
-                        a = bytes[byteIndex + 3 * bpvc + 3 * bpcc];
-                    }
-                    colors.Add(new Color(r/255f, g/255f, b/255f, a/255f));
-                }
-
-
-                vertices.Add(new Vector3(x, y, z));
-            }
-            return vertices;
-        }
-        private static List<int> GetTriangles(byte[] bytes, PlyHeader header)
-        {
-            var toSkip = header.VertexCount * GetByteCountPerVertex(header);
-            var triangles = new List<int>();
-            int facesRead = 0;
-            int bytesRead = 0;
-            int bytesPerTriangleIndex = 4;
-            while (facesRead < header.FaceCount)
-            {
-                var faceIndex = toSkip + bytesRead;
-                var indexCount = bytes[faceIndex];
-                if (indexCount == 3)
-                {
-                    for (int i = 0; i < indexCount; i++)
-                    {
-                        triangles.Add(System.BitConverter.ToInt32(bytes.SubArray(faceIndex + 1 + i * bytesPerTriangleIndex, bytesPerTriangleIndex), 0));
-                    }
-                    bytesRead += 1 + indexCount * bytesPerTriangleIndex;
-                }
-                else if (indexCount == 4)
-                {
-                    var tmp = new List<int>();
-                    for (int i = 0; i < indexCount; i++)
-                    {
-                        tmp.Add(System.BitConverter.ToInt32(bytes.SubArray(faceIndex + 1 + i * bytesPerTriangleIndex, bytesPerTriangleIndex), 0));
-                    }
-                    triangles.AddRange(QuadToTriangles(tmp));
-                    bytesRead += 1 + indexCount * bytesPerTriangleIndex;
-                }
-                else
-                {
-                    Debug.LogWarning("Warning: Found a face with more than 4 vertices, skipping...");
-                }
-
-                facesRead++;
-            }
-            return triangles;
-        }
 
         private static int GetByteCountPerVertex(PlyHeader header)
         {
@@ -197,7 +127,6 @@ namespace ThreeDeeBear.Models.Ply
             int a = header.AlphaIndex.HasValue ? bpcc : 0;
             return (3 * bpvc + r + g + b + a);
         }
-        #endregion
 
         private static List<int> QuadToTriangles(List<int> quad)
         {
@@ -212,10 +141,6 @@ namespace ThreeDeeBear.Models.Ply
             if (headerParsed.Format == PlyFormat.Ascii)
             {
                 return ParseAscii(File.ReadAllLines(path).ToList(), headerParsed);
-            }
-            else if (headerParsed.Format == PlyFormat.BinaryLittleEndian)
-            {
-                return ParseBinaryLittleEndian(path, headerParsed);
             }
             else // todo: support BinaryBigEndian
             {
